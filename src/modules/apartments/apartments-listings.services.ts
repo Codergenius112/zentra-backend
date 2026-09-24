@@ -1,11 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { ApartmentListing } from '../../shared/entities/apartment-listing.entity';
 import {
   IsString, IsOptional, IsNumber, Min, IsArray, ArrayMinSize, IsBoolean,
 } from 'class-validator';
 import { BusinessContextService } from '../../shared/services/business-context.service'; // ← NEW (multi-tenancy)
+
+// ← NEW: listings returned to callers carry the owning business's display
+// name alongside the raw businessId, resolved via attachBusinessNames below.
+export type ApartmentListingWithBusiness = ApartmentListing & { businessName?: string };
 
 // Was previously a plain interface, which NestJS's ValidationPipe cannot
 // validate at all (interfaces are erased at runtime) — the controller took
@@ -70,14 +74,38 @@ export class ApartmentListingsService {
     @InjectRepository(ApartmentListing)
     private listingRepository: Repository<ApartmentListing>,
     private readonly businessContext: BusinessContextService, // ← NEW (multi-tenancy)
+    @InjectDataSource() private readonly dataSource: DataSource, // ← NEW: for businessName lookups
   ) {}
+
+  /**
+   * Resolves each listing's businessId → business name in a single batched
+   * query and attaches it as `businessName`. Listings with no businessId
+   * (legacy/unassigned) simply get businessName: undefined.
+   */
+  private async attachBusinessNames(listings: ApartmentListing[]): Promise<ApartmentListingWithBusiness[]> {
+    const businessIds = Array.from(
+      new Set(listings.map((l) => (l as any).businessId).filter((id): id is string => !!id)),
+    );
+    if (businessIds.length === 0) return listings as ApartmentListingWithBusiness[];
+
+    const rows = await this.dataSource.query(
+      `SELECT id, name FROM businesses WHERE id = ANY($1)`,
+      [businessIds],
+    );
+    const nameById = new Map<string, string>(rows.map((r: any) => [r.id, r.name]));
+
+    return listings.map((l) => ({
+      ...l,
+      businessName: (l as any).businessId ? nameById.get((l as any).businessId) : undefined,
+    }));
+  }
 
   /**
    * GET /apartments/listings
    * Public: all active listings. Staff (businessIds provided): only their
    * own business(es)' listings, active or not.
    */
-  async getListings(query: GetApartmentListingsQuery): Promise<{ listings: ApartmentListing[]; total: number }> {
+  async getListings(query: GetApartmentListingsQuery): Promise<{ listings: ApartmentListingWithBusiness[]; total: number }> {
     if (query.businessIds && query.businessIds.length === 0) return { listings: [], total: 0 };
 
     const qb = this.listingRepository.createQueryBuilder('listing');
@@ -108,14 +136,14 @@ export class ApartmentListingsService {
       .skip(query.offset || 0);
 
     const [listings, total] = await qb.getManyAndCount();
-    return { listings, total };
+    return { listings: await this.attachBusinessNames(listings), total };
   }
 
   /**
    * GET /apartments/listings/:id
    * Returns a single listing by ID.
    */
-  async getListing(id: string, businessIds?: string[]): Promise<ApartmentListing> {
+  async getListing(id: string, businessIds?: string[]): Promise<ApartmentListingWithBusiness> {
     const listing = await this.listingRepository.findOne({
       where: { id, isActive: true },
     });
@@ -125,7 +153,8 @@ export class ApartmentListingsService {
     if (businessIds !== undefined && (!businessIds.length || !businessIds.includes((listing as any).businessId))) {
       throw new NotFoundException(`Apartment listing ${id} not found`);
     }
-    return listing;
+    const [withBusiness] = await this.attachBusinessNames([listing]);
+    return withBusiness;
   }
 
   /**
