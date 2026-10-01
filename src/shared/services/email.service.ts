@@ -1,0 +1,228 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as nodemailer from 'nodemailer';
+import * as QRCode from 'qrcode';
+
+interface ReceiptEmailPayload {
+  customerName?: string;
+  bookingId: string;
+  amount: number;
+  currency?: string;
+  reference?: string;
+  status?: string;
+  createdAt?: Date;
+}
+
+interface TicketQrEmailPayload {
+  customerName?: string;
+  bookingId: string;
+  eventId?: string;
+  guestCount?: number;
+  qrCodeDataUrl: string;
+}
+
+@Injectable()
+export class EmailService {
+  private readonly logger = new Logger(EmailService.name);
+
+  constructor(private readonly configService: ConfigService) {}
+
+  private getConfig(key: string, fallback?: string): string | undefined {
+    return this.configService.get<string>(key) ?? fallback;
+  }
+
+  async generateTicketQrDataUrl(payload: Record<string, unknown> | string): Promise<string> {
+    const value = typeof payload === 'string' ? payload : JSON.stringify(payload);
+
+    return QRCode.toDataURL(value, {
+      type: 'image/png',
+      margin: 1,
+      width: 220,
+      errorCorrectionLevel: 'M',
+    });
+  }
+
+  buildReceiptHtml(payload: ReceiptEmailPayload): string {
+    const appName = this.getConfig('APP_NAME', 'Zentra') ?? 'Zentra';
+    const amount = new Intl.NumberFormat('en-NG', {
+      style: 'currency',
+      currency: payload.currency ?? 'NGN',
+      minimumFractionDigits: 2,
+    }).format(Number(payload.amount ?? 0));
+
+    const createdAt = payload.createdAt
+      ? new Intl.DateTimeFormat('en-NG', {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        }).format(new Date(payload.createdAt))
+      : 'N/A';
+
+    return `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #111827;">
+        <div style="background: #0f172a; color: white; padding: 24px; border-radius: 12px 12px 0 0;">
+          <h2 style="margin: 0; font-size: 28px;">${appName}</h2>
+          <p style="margin: 8px 0 0; opacity: 0.9;">Purchase receipt</p>
+        </div>
+        <div style="padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px; background: #ffffff;">
+          <p style="margin: 0 0 16px;">Hello ${payload.customerName ?? 'Customer'},</p>
+          <p style="margin: 0 0 24px;">Your payment has been received successfully.</p>
+
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+              <td style="padding: 12px 0; color: #6b7280;">Booking ID</td>
+              <td style="padding: 12px 0; text-align: right; font-weight: 600;">${payload.bookingId}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+              <td style="padding: 12px 0; color: #6b7280;">Reference</td>
+              <td style="padding: 12px 0; text-align: right; font-weight: 600;">${payload.reference ?? 'N/A'}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+              <td style="padding: 12px 0; color: #6b7280;">Amount</td>
+              <td style="padding: 12px 0; text-align: right; font-weight: 600;">${amount}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #e5e7eb;">
+              <td style="padding: 12px 0; color: #6b7280;">Date</td>
+              <td style="padding: 12px 0; text-align: right; font-weight: 600;">${createdAt}</td>
+            </tr>
+            <tr>
+              <td style="padding: 12px 0; color: #6b7280;">Status</td>
+              <td style="padding: 12px 0; text-align: right; font-weight: 600; color: #15803d;">${payload.status ?? 'PAID'}</td>
+            </tr>
+          </table>
+
+          <p style="margin: 0; color: #374151;">Thank you for choosing ${appName}.</p>
+        </div>
+      </div>
+    `;
+  }
+
+  async sendReceiptEmail(payload: ReceiptEmailPayload & { to: string }): Promise<boolean> {
+    const to = payload.to;
+    const subject = `Your ${this.getConfig('APP_NAME', 'Zentra') ?? 'Zentra'} payment receipt`;
+    const html = this.buildReceiptHtml(payload);
+
+    return this.sendEmail({
+      to,
+      subject,
+      html,
+      text: `Your payment receipt for booking ${payload.bookingId} has been generated successfully.`,
+    });
+  }
+
+  async sendTicketQrEmail(payload: TicketQrEmailPayload & { to: string }): Promise<boolean> {
+    const to = payload.to;
+    const subject = `Your ${this.getConfig('APP_NAME', 'Zentra') ?? 'Zentra'} ticket QR code`;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #111827;">
+        <div style="background: linear-gradient(135deg, #0f172a, #1d4ed8); color: white; padding: 24px; border-radius: 12px 12px 0 0;">
+          <h2 style="margin: 0; font-size: 28px;">Your ticket is ready</h2>
+        </div>
+        <div style="padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px; background: #ffffff;">
+          <p style="margin: 0 0 16px;">Hello ${payload.customerName ?? 'Customer'},</p>
+          <p style="margin: 0 0 20px;">Your ticket for booking <strong>${payload.bookingId}</strong> is attached below.</p>
+
+          <div style="text-align: center; margin: 20px 0;">
+            <img src="${payload.qrCodeDataUrl}" alt="Ticket QR code" style="max-width: 220px; width: 100%; border: 1px solid #d1d5db; border-radius: 12px; background: white; padding: 12px;" />
+          </div>
+
+          <p style="margin: 0 0 8px; color: #374151;">Booking ID: <strong>${payload.bookingId}</strong></p>
+          <p style="margin: 0 0 8px; color: #374151;">Event ID: <strong>${payload.eventId ?? 'N/A'}</strong></p>
+          <p style="margin: 0; color: #374151;">Guests: <strong>${payload.guestCount ?? 1}</strong></p>
+        </div>
+      </div>
+    `;
+
+    return this.sendEmail({
+      to,
+      subject,
+      html,
+      text: `Your ticket QR code is ready for booking ${payload.bookingId}.`,
+    });
+  }
+
+  private async sendEmail({
+    to,
+    subject,
+    html,
+    text,
+  }: {
+    to: string;
+    subject: string;
+    html: string;
+    text: string;
+  }): Promise<boolean> {
+    const fromName = this.getConfig('EMAIL_FROM_NAME', 'Zentra');
+    const fromAddress = this.getConfig('EMAIL_FROM', 'noreply@zentra.app');
+    const provider = this.getConfig('EMAIL_PROVIDER', 'smtp');
+    const smtpHost = this.getConfig('SMTP_HOST');
+    const smtpPort = Number(this.getConfig('SMTP_PORT') ?? '587');
+    const smtpUser = this.getConfig('SMTP_USER');
+    const smtpPass = this.getConfig('SMTP_PASS') ?? this.getConfig('SENDGRID_API_KEY');
+
+    if (!to || !subject) {
+      this.logger.warn('Email skipped because recipient or subject is missing.');
+      return false;
+    }
+
+    if (provider === 'sendgrid' || (!smtpHost && !smtpUser && !smtpPass && this.getConfig('SENDGRID_API_KEY'))) {
+      const host = smtpHost ?? 'smtp.sendgrid.net';
+      const user = smtpUser ?? 'apikey';
+      const pass = smtpPass ?? this.getConfig('SENDGRID_API_KEY');
+
+      if (!pass) {
+        this.logger.warn('Email skipped because SENDGRID_API_KEY / SMTP credentials are not configured.');
+        return false;
+      }
+
+      try {
+        const transporter = nodemailer.createTransport({
+          host,
+          port: smtpPort || 587,
+          secure: smtpPort === 465,
+          auth: { user, pass },
+        });
+
+        await transporter.sendMail({
+          from: `${fromName} <${fromAddress}>`,
+          to,
+          subject,
+          text,
+          html,
+        });
+
+        return true;
+      } catch (error) {
+        this.logger.error('Failed to send email via SMTP/SendGrid', error instanceof Error ? error.stack : error);
+        return false;
+      }
+    }
+
+    if (!smtpHost || !smtpUser || !smtpPass) {
+      this.logger.warn('Email skipped because SMTP credentials are not configured.');
+      return false;
+    }
+
+    try {
+      const transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: smtpPort || 587,
+        secure: smtpPort === 465,
+        auth: { user: smtpUser, pass: smtpPass },
+      });
+
+      await transporter.sendMail({
+        from: `${fromName} <${fromAddress}>`,
+        to,
+        subject,
+        text,
+        html,
+      });
+
+      return true;
+    } catch (error) {
+      this.logger.error('Failed to send email', error instanceof Error ? error.stack : error);
+      return false;
+    }
+  }
+}

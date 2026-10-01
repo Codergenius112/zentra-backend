@@ -14,16 +14,19 @@ import { Booking }            from '../../shared/entities/booking.entity';
 import { PaymentTransaction } from '../../shared/entities/payment.entity';
 import { Wallet }             from '../../shared/entities/wallet.entity';
 import { FinancialLedger }    from '../../shared/entities/financial-ledger.entity';
+import { User }               from '../../shared/entities/user.entity';
 
 import {
   PaymentStatus,
   BookingStatus,
   AuditActionType,
   UserRole,
+  BookingType,
 } from '../../shared/enums';
 
 import { AuditService } from '../audit/audit.service';
 import { BusinessContextService } from '../../shared/services/business-context.service'; // ← NEW (multi-tenancy — payments/wallet gap fix)
+import { EmailService } from '../../shared/services/email.service';
 
 @Injectable()
 export class PaymentService {
@@ -45,9 +48,13 @@ export class PaymentService {
     @InjectRepository(FinancialLedger)
     private ledgerRepository: Repository<FinancialLedger>,
 
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
+
     private dataSource: DataSource,
     private auditService: AuditService,
     private readonly businessContext: BusinessContextService, // ← NEW (multi-tenancy)
+    private readonly emailService: EmailService,
   ) {}
 
   private async getTotalPaidForBookingTx(
@@ -159,6 +166,46 @@ export class PaymentService {
       },
       ipAddress,
     });
+
+    const booking = await this.bookingRepository.findOne({ where: { id: bookingId } });
+    if (booking && booking.paymentStatus === PaymentStatus.FULLY_PAID) {
+      const customer = await this.userRepository.findOne({ where: { id: userId } });
+
+      if (customer?.email) {
+        const receiptSent = await this.emailService.sendReceiptEmail({
+          to: customer.email,
+          customerName: [customer.firstName, customer.lastName].filter(Boolean).join(' ') || customer.email,
+          bookingId: booking.id,
+          amount: Number(booking.totalAmount),
+          currency: 'NGN',
+          reference: savedPayment.externalRefId ?? booking.id,
+          status: String(savedPayment.status),
+          createdAt: new Date(),
+        });
+
+        if (receiptSent && booking.bookingType === BookingType.TICKET) {
+          const qrPayload = {
+            bookingId: booking.id,
+            eventId: booking.resourceId,
+            userId: booking.userId,
+            guestCount: booking.guestCount ?? 1,
+            issuedAt: new Date().toISOString(),
+          };
+          const qrDataUrl = await this.emailService.generateTicketQrDataUrl(qrPayload);
+          booking.qrCodeData = JSON.stringify(qrPayload);
+          await this.bookingRepository.save(booking);
+
+          await this.emailService.sendTicketQrEmail({
+            to: customer.email,
+            customerName: [customer.firstName, customer.lastName].filter(Boolean).join(' ') || customer.email,
+            bookingId: booking.id,
+            eventId: booking.resourceId,
+            guestCount: booking.guestCount ?? 1,
+            qrCodeDataUrl: qrDataUrl,
+          });
+        }
+      }
+    }
 
     return savedPayment;
   }
