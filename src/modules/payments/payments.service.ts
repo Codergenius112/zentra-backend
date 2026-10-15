@@ -27,6 +27,7 @@ import {
 import { AuditService } from '../audit/audit.service';
 import { BusinessContextService } from '../../shared/services/business-context.service'; // ← NEW (multi-tenancy — payments/wallet gap fix)
 import { EmailService } from '../../shared/services/email.service';
+import { PaystackService } from './paystack.service';
 
 @Injectable()
 export class PaymentService {
@@ -55,6 +56,7 @@ export class PaymentService {
     private auditService: AuditService,
     private readonly businessContext: BusinessContextService, // ← NEW (multi-tenancy)
     private readonly emailService: EmailService,
+    private readonly paystackService: PaystackService,
   ) {}
 
   private async getTotalPaidForBookingTx(
@@ -84,11 +86,78 @@ export class PaymentService {
     ipAddress: string,
     paystackReference?: string,
   ): Promise<PaymentTransaction> {
+    if (method === 'paystack') {
+      if (!paystackReference) {
+        throw new BadRequestException('paystackReference is required for paystack payments');
+      }
+
+      // THE trust boundary for a Paystack payment. Previously this method
+      // took amount/method/paystackReference straight from the request body
+      // with no independent check — any authenticated customer could call
+      // POST /payments directly (skipping /payments/paystack/verify
+      // entirely) with a fabricated reference and amount and mark their own
+      // booking paid for free. Asking Paystack's own servers, with our
+      // secret key, whether this reference actually succeeded — and for how
+      // much — is what makes this legitimate, independent of whether the
+      // client called verify first, and independent of whether the webhook
+      // ever arrives.
+      const verification = await this.paystackService.verifyTransaction(paystackReference);
+      if (verification.status !== 'success') {
+        throw new BadRequestException(
+          `Paystack transaction ${paystackReference} was not successful (status: ${verification.status})`,
+        );
+      }
+
+      // Purpose guard, mirroring WalletService.creditVerifiedTopUp: one
+      // successful charge may serve exactly ONE purpose. Without this, a
+      // wallet top-up reference could ALSO confirm a booking (and vice
+      // versa), double-spending a single Paystack transaction.
+      const refStr = String(paystackReference);
+      if (
+        refStr.startsWith('wallet-topup-') ||
+        refStr.startsWith('ZTR-WALLET-') ||
+        verification.metadata?.purpose === 'wallet_topup'
+      ) {
+        throw new BadRequestException(
+          'This reference is a wallet top-up and cannot be used to pay for a booking.',
+        );
+      }
+      // The client-supplied amount is never trusted for a paystack payment;
+      // verification.amountNaira below is what the customer ACTUALLY paid.
+      // It is kept as proof-of-receipt only — our own booking total (set
+      // from the admin side) is the authoritative figure for the books, so
+      // Paystack's own additions (VAT/fees get folded into the customer
+      // charge in some integrations — e.g. a ₦5,550 charge arriving as
+      // ₦5,736.05) can no longer inflate the recorded payment. See the
+      // clamp inside the transaction.
+      amount = verification.amountNaira;
+
+      // Replay protection: a single successful reference must confirm
+      // exactly one booking. Same-booking reuse (e.g. the webhook and this
+      // call racing each other) is a different, safe case — handled as an
+      // idempotent no-op by the lock + status check further down.
+      const existingForRef = await this.paymentRepository.findOne({
+        where: { externalRefId: paystackReference },
+      });
+      if (existingForRef && existingForRef.bookingId !== bookingId) {
+        throw new BadRequestException(
+          'This payment reference has already been used for a different booking.',
+        );
+      }
+    }
+
     let savedPayment!: PaymentTransaction;
+    let alreadyConfirmed = false;
 
     await this.dataSource.transaction(async (manager: EntityManager) => {
+      // Locked, not a plain findOne: the Paystack webhook and the mobile
+      // client's own post-verify call can now both legitimately try to
+      // confirm the same booking (see paystack-webhook.controller.ts's
+      // metadata fallback). The lock serializes them so the idempotency
+      // check below is race-free instead of check-then-act.
       const booking = await manager.findOne(Booking, {
         where: { id: bookingId },
+        lock: { mode: 'pessimistic_write' },
       });
 
       if (!booking) {
@@ -97,6 +166,44 @@ export class PaymentService {
 
       if (amount <= 0) {
         throw new BadRequestException('Amount must be greater than 0');
+      }
+
+      if (method === 'paystack') {
+        // OUR price is authoritative: the amount set from the admin side
+        // (booking.totalAmount), not Paystack's charged figure. The verify
+        // call above already proved the customer genuinely paid at least
+        // this much — Paystack may bill them slightly MORE (fees/VAT), and
+        // that surplus stays with Paystack rather than inflating the
+        // payment row, the ledger, or refund calculations (which all key
+        // off payment.amount). If the charge came in BELOW the booking
+        // total it is recorded as the honest partial it is; the existing
+        // currentPaid accumulation below then keeps the booking
+        // PARTIALLY_PAID until the shortfall is genuinely covered.
+        const expected = Number(booking.totalAmount);
+        if (!Number.isFinite(expected) || expected <= 0) {
+          throw new BadRequestException(
+            `Booking ${bookingId} has an invalid total amount`,
+          );
+        }
+        amount = Math.min(amount, expected);
+      }
+
+      // Whichever caller (webhook or client) got here second finds the
+      // booking already settled — make it a safe no-op rather than a
+      // duplicate payment row, a duplicate wallet debit, and a duplicate
+      // receipt email.
+      if (booking.paymentStatus === PaymentStatus.FULLY_PAID) {
+        const existing = await manager.findOne(PaymentTransaction, {
+          where: { bookingId, status: PaymentStatus.FULLY_PAID },
+          order: { completedAt: 'DESC' },
+        });
+        if (existing) {
+          savedPayment = existing;
+          alreadyConfirmed = true;
+          return;
+        }
+        // Booking says paid but no matching payment row exists — fall
+        // through and record one rather than silently doing nothing.
       }
 
       if (method === 'wallet') {
@@ -153,6 +260,10 @@ export class PaymentService {
 
       await manager.save(ledgerEntry);
     });
+
+    if (alreadyConfirmed) {
+      return savedPayment;
+    }
 
     await this.auditService.logAction({
       actionType:   AuditActionType.PAYMENT_PROCESSED,

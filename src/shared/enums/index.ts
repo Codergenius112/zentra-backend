@@ -95,6 +95,20 @@ export enum AuditActionType {
   WALLET_CREDITED = 'WALLET_CREDITED',           // ← NEW
   QUEUE_ADVANCED = 'QUEUE_ADVANCED',             // ← NEW
   QUEUE_CLOSED = 'QUEUE_CLOSED',                 // ← NEW
+    // ← NEW — genuinely missing, not just unsynced: no prior value covered
+  // these at all. wallet.service.ts's debit()/transfer() and
+  // queues.service.ts's join/call/checkin/cancel were logging with
+  // 'WALLET_DEBIT'/'WALLET_TRANSFER'/'QUEUE_JOINED'/'QUEUE_CALLED'/
+  // 'QUEUE_CHECKIN'/'QUEUE_CANCELLED' cast through `as any` — none of
+  // which exist anywhere, DB enum or TS enum. Every one of those calls
+  // throws on insert. Named to match this enum's own past-tense convention
+  // (WALLET_CREDITED, BOOKING_CANCELLED, etc.).
+  WALLET_DEBITED = 'WALLET_DEBITED',  // ← NEW
+  WALLET_TRANSFERRED = 'WALLET_TRANSFERRED',  // ← NEW
+  QUEUE_JOINED = 'QUEUE_JOINED',  // ← NEW
+  QUEUE_CALLED = 'QUEUE_CALLED',  // ← NEW
+  QUEUE_CHECKED_IN = 'QUEUE_CHECKED_IN',  // ← NEW
+  QUEUE_CANCELLED = 'QUEUE_CANCELLED',  // ← NEW
   CAUTION_FEE_REFUNDED = 'CAUTION_FEE_REFUNDED', // ← NEW
   CAUTION_FEE_FORFEITED = 'CAUTION_FEE_FORFEITED', // ← NEW
   PRICE_UPDATED = 'PRICE_UPDATED',               // ← NEW
@@ -103,7 +117,8 @@ export enum AuditActionType {
   STAFF_ASSIGNMENT_CREATED = 'STAFF_ASSIGNMENT_CREATED', // ← NEW (multi-tenancy)
   STAFF_ASSIGNMENT_REVOKED = 'STAFF_ASSIGNMENT_REVOKED', // ← NEW (multi-tenancy)
   DATA_SHARE_GRANTED = 'DATA_SHARE_GRANTED',             // ← NEW (multi-tenancy)
-  DATA_SHARE_REVOKED = 'DATA_SHARE_REVOKED',             // ← NEW (multi-tenancy)
+  DATA_SHARE_REVOKED = 'DATA_SHARE_REVOKED', 
+              // ← NEW (multi-tenancy)
 }
 
 // ← NEW (multi-tenancy) — lifecycle status of a Business (tenant)

@@ -7,6 +7,7 @@ import {
   UseGuards,
   HttpCode,
   ForbiddenException,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -65,7 +66,10 @@ export class QueuesController {
 
   @Get('position/:queueId')
   @Roles(UserRole.CUSTOMER)
-  async getQueuePosition(@Param('queueId') queueId: string) {
+  // ParseUUIDPipe: queueId feeds a uuid column directly; a malformed id
+  // used to reach Postgres and 500 on "invalid input syntax for type
+  // uuid" before the service's own not-found check could run.
+  async getQueuePosition(@Param('queueId', ParseUUIDPipe) queueId: string) {
     return this.queuesService.getQueuePosition(queueId);
   }
 
@@ -73,7 +77,7 @@ export class QueuesController {
   @Roles(UserRole.CUSTOMER, UserRole.DOOR_STAFF)
   @HttpCode(200)
   async checkInFromQueue(
-    @Param('queueId') queueId: string,
+    @Param('queueId', ParseUUIDPipe) queueId: string,
     @CurrentUser() user: any,
     @IpAddress() ipAddress: string,
   ) {
@@ -84,7 +88,7 @@ export class QueuesController {
   @Roles(UserRole.CUSTOMER)
   @HttpCode(200)
   async cancelQueue(
-    @Param('queueId') queueId: string,
+    @Param('queueId', ParseUUIDPipe) queueId: string,
     @CurrentUser() user: any,
     @IpAddress() ipAddress: string,
   ) {

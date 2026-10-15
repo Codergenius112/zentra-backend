@@ -2,6 +2,7 @@ import {
   Controller, Get, Post, Body, UseGuards, HttpCode,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { IsString, IsOptional, IsNumber } from 'class-validator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -12,6 +13,27 @@ import { UserRole } from '../../shared/enums';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FinancialLedger } from '../../shared/entities/financial-ledger.entity';
+
+// Was previously `@Body() body: { amount: number; paystackReference: string
+// }` — a plain TS type, not a class. class-validator (and this app's global
+// ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) has no
+// metadata to work with for a plain type literal, so it silently did
+// nothing: any JSON body passed straight through untouched. A real DTO
+// class is what makes whitelisting actually happen.
+class FundWalletDto {
+  @IsString()
+  paystackReference: string;
+
+  // Accepted so the client can still send it for its own display/logging
+  // purposes (and so existing mobile builds that send it don't get
+  // rejected by forbidNonWhitelisted), but it is never trusted — see
+  // WalletService.fundViaPaystack, which derives the real amount from
+  // Paystack's own verify response, the same trust boundary
+  // PaymentService.processPayment uses for booking payments.
+  @IsOptional()
+  @IsNumber()
+  amount?: number;
+}
 
 @ApiTags('Wallet')
 @ApiBearerAuth()
@@ -63,31 +85,40 @@ export class WalletController {
   /**
    * POST /wallet/fund
    * Called after a successful Paystack payment to credit the wallet.
-   * Body: { amount, paystackReference }
+   * Body: { paystackReference } — amount is accepted but never trusted,
+   * see FundWalletDto and WalletService.fundViaPaystack.
+   *
+   * Previously this credited body.amount directly with ZERO verification —
+   * no call to Paystack, no DTO (so the ValidationPipe couldn't even
+   * whitelist the body), and mobile was sending a field literally named
+   * `reference` while this read `paystackReference`, so the real-world
+   * reference was always undefined anyway. Any authenticated customer could
+   * call this directly with a fabricated amount and a made-up reference and
+   * get free, repeatable wallet credit. Now delegates to
+   * WalletService.fundViaPaystack, which independently re-verifies with
+   * Paystack and rejects a reference already used for a previous top-up —
+   * the same trust boundary PaymentService.processPayment uses for booking
+   * payments.
    */
   @Post('fund')
   @Roles(UserRole.CUSTOMER)
   @HttpCode(200)
   async fundWallet(
-    @Body() body: { amount: number; paystackReference: string },
+    @Body() body: FundWalletDto,
     @CurrentUser() user: any,
     @IpAddress() ipAddress: string,
   ) {
-    if (!body.amount || body.amount <= 0) {
-      return { success: false, message: 'Invalid amount' };
-    }
-
-    const wallet = await this.walletService.credit(
+    const wallet = await this.walletService.fundViaPaystack(
       user.id,
-      Number(body.amount),
-      `Wallet top-up via Paystack (ref: ${body.paystackReference})`,
+      user.email,
+      body.paystackReference,
       ipAddress,
     );
 
     return {
       success: true,
       balance: Number(wallet.balance),
-      message: `₦${Number(body.amount).toLocaleString()} added to your wallet`,
+      message: 'Wallet funded successfully.',
     };
   }
 }

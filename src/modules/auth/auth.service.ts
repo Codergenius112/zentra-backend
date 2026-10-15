@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   UnauthorizedException,
   BadRequestException,
   NotFoundException,
@@ -13,9 +14,12 @@ import { Wallet } from '../../shared/entities/wallet.entity';
 import { RegisterDto, LoginDto, AuthResponseDto, AdminRegisterDto } from '../../shared/dtos/auth.dto';
 import { UserRole, BusinessScope } from '../../shared/enums';
 import { StringValue } from 'ms';
+import { EmailService } from '../../shared/services/email.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User)
     private userRepository: Repository<User>,
@@ -25,6 +29,7 @@ export class AuthService {
 
     private jwtService: JwtService,
     private dataSource: DataSource,
+    private emailService: EmailService,
   ) {}
 
   // ================= REGISTER =================
@@ -215,9 +220,27 @@ export class AuthService {
       },
     );
 
-    // TODO: Send email with reset link containing the token
-    // For now, return the token so the frontend can use it
-    return { message: 'If the email exists, a reset link has been sent.', resetToken };
+    const sent = await this.emailService.sendPasswordResetEmail({
+      to: user.email,
+      customerName: user.firstName,
+      resetToken,
+      expiresInMinutes: 15,
+    });
+    if (!sent) {
+      // Don't throw — same reasoning as the "don't reveal if email exists"
+      // branch above. Misconfigured SMTP shouldn't surface as an auth-flow
+      // error to the end user; it's visible in EmailService's own logs.
+      this.logger.warn(`Password reset email failed to send to ${user.email}`);
+    }
+
+    // The token only goes in the API response outside production, so a
+    // developer can test the reset flow without real email configured.
+    // In production, the email is the only way to get it.
+    const includeTokenInResponse = process.env.NODE_ENV !== 'production';
+    return {
+      message: 'If the email exists, a reset link has been sent.',
+      ...(includeTokenInResponse ? { resetToken } : {}),
+    };
   }
 
   // ================= RESET PASSWORD =================

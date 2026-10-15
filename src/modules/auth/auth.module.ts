@@ -8,6 +8,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { AuditModule } from '../audit/audit.module';
+import { EmailService } from '../../shared/services/email.service';
 
 @Module({
   imports: [
@@ -19,7 +20,7 @@ import { AuditModule } from '../audit/audit.module';
     }),
     AuditModule,
   ],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, EmailService],
   controllers: [AuthController],
   exports: [AuthService],
 })

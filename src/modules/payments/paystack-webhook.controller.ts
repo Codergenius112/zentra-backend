@@ -4,14 +4,15 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
+import { RawBodyRequest } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PaymentTransaction } from '../../shared/entities/payment.entity';
 import { Booking } from '../../shared/entities/booking.entity';
-import { Wallet } from '../../shared/entities/wallet.entity';
-import { FinancialLedger } from '../../shared/entities/financial-ledger.entity';
-import { PaymentStatus, BookingStatus } from '../../shared/enums';
+import { PaymentStatus } from '../../shared/enums';
+import { PaymentService } from './payments.service';
+import { WalletService } from './wallet.service';
 
 @ApiTags('Payments - Webhook')
 @Controller('payments')
@@ -23,16 +24,14 @@ export class PaystackWebhookController {
     private paymentRepo: Repository<PaymentTransaction>,
     @InjectRepository(Booking)
     private bookingRepo: Repository<Booking>,
-    @InjectRepository(Wallet)
-    private walletRepo: Repository<Wallet>,
-    @InjectRepository(FinancialLedger)
-    private ledgerRepo: Repository<FinancialLedger>,
+    private paymentService: PaymentService,
+    private walletService: WalletService,
   ) {}
 
   @Post('webhook')
   @HttpCode(200)
   async handleWebhook(
-    @Req() req: Request,
+    @Req() req: RawBodyRequest<Request>,
     @Headers('x-paystack-signature') signature: string,
   ) {
     // 1. Reject immediately if signature header is missing
@@ -41,9 +40,14 @@ export class PaystackWebhookController {
       throw new BadRequestException('Missing signature');
     }
 
-    // 2. Ensure body is a raw Buffer
-    if (!Buffer.isBuffer(req.body)) {
-      this.logger.error('Webhook rejected: raw body middleware not configured correctly');
+    // 2. Ensure the raw buffer is actually present. req.rawBody is populated
+    // by Nest itself (rawBody:true in main.ts's NestFactory.create) — NOT
+    // req.body, which Nest's normal JSON parser still turns into a parsed
+    // object for every route, this one included. There is deliberately no
+    // separate express.raw() middleware for this route anymore; see the
+    // comment in main.ts for why that broke every webhook call.
+    if (!req.rawBody || !Buffer.isBuffer(req.rawBody)) {
+      this.logger.error('Webhook rejected: req.rawBody missing — is rawBody:true still set in main.ts?');
       throw new BadRequestException('Invalid body format');
     }
 
@@ -54,7 +58,7 @@ export class PaystackWebhookController {
       throw new BadRequestException('Webhook misconfigured');
     }
 
-    const rawBody = req.body.toString('utf8');
+    const rawBody = req.rawBody.toString('utf8');
     const hash = crypto
       .createHmac('sha512', secret)
       .update(rawBody)
@@ -109,130 +113,115 @@ export class PaystackWebhookController {
   }
 
   private async handleChargeSuccess(data: any): Promise<void> {
-    const reference  = data?.reference;
-    const amountKobo = data?.amount;
+    const reference = data?.reference;
 
     if (!reference || typeof reference !== 'string') {
       this.logger.warn('charge.success: missing or invalid reference');
       return;
     }
 
-    if (!amountKobo || typeof amountKobo !== 'number') {
-      this.logger.warn('charge.success: missing or invalid amount');
+    // Wallet top-ups. An incoming card payment — which is what a top-up is —
+    // arrives as `charge.success`. Previously the only wallet handling here
+    // was under `transfer.success` (see handleTransferSuccess), so if the app
+    // was killed between paying and calling /wallet/fund, the webhook found no
+    // payment row, logged a warning and dropped it: money taken, wallet never
+    // credited. Same shared, verified, idempotent path as the client routes.
+    if (this.isWalletTopUp(reference, data)) {
+      const wallet = await this.walletService.fundFromWebhook(reference, 'webhook');
+      if (wallet) {
+        this.logger.log(`Wallet top-up confirmed via webhook (ref: ${reference})`);
+      }
       return;
     }
-
-    const amountNaira = amountKobo / 100;
 
     const payment = await this.paymentRepo.findOne({
       where: { externalRefId: reference },
     });
 
-    if (!payment) {
-      this.logger.warn(`charge.success: no payment record found for ref: ${reference}`);
-      return;
-    }
-
-    if (payment.status === PaymentStatus.FULLY_PAID) {
+    if (payment?.status === PaymentStatus.FULLY_PAID) {
       this.logger.log(`charge.success: payment ${reference} already confirmed — skipping`);
       return;
     }
 
-    if (Number(payment.amount) !== amountNaira) {
-      this.logger.warn(
-        `charge.success: amount mismatch for ref ${reference} — ` +
-        `expected ₦${payment.amount}, got ₦${amountNaira}`
-      );
+    // bookingId: prefer an existing payment row's bookingId (set by
+    // whichever path got there first — most often the client's own
+    // post-verify call). Falls back to the bookingId Paystack echoes back
+    // in the charge's metadata (set client-side when checkout was opened —
+    // see PaymentScreen.startCharge's popup.checkout({ metadata }) call)
+    // for the case where this webhook is the first thing to arrive at all.
+    const bookingId = payment?.bookingId ?? data?.metadata?.bookingId;
+    if (!bookingId || typeof bookingId !== 'string') {
+      this.logger.warn(`charge.success: no payment record and no metadata.bookingId for ref: ${reference}`);
+      return;
     }
 
-    payment.status      = PaymentStatus.FULLY_PAID;
-    payment.completedAt = new Date();
-    await this.paymentRepo.save(payment);
-
-    const booking = await this.bookingRepo.findOne({
-      where: { id: payment.bookingId },
-    });
-
+    const booking = await this.bookingRepo.findOne({ where: { id: bookingId } });
     if (!booking) {
-      this.logger.warn(`charge.success: no booking found for payment ${reference}`);
+      this.logger.warn(`charge.success: bookingId ${bookingId} matches no booking (ref: ${reference})`);
       return;
     }
 
-    if (booking.status === BookingStatus.CONFIRMED) {
-      this.logger.log(`charge.success: booking ${booking.id} already confirmed — skipping`);
-      return;
-    }
-
-    booking.paymentStatus = PaymentStatus.FULLY_PAID;
-    booking.status        = BookingStatus.CONFIRMED;
-    booking.paymentMethod = 'paystack';
-    await this.bookingRepo.save(booking);
-
-    this.logger.log(`Booking ${booking.id} confirmed via webhook — ₦${amountNaira}`);
+    // Always delegates to processPayment rather than hand-updating
+    // payment/booking status here — this used to trust the webhook
+    // payload's amount directly when a payment row already existed, only
+    // logging a warning on mismatch and confirming anyway. processPayment
+    // does its own independent, authoritative verifyTransaction call
+    // against Paystack every time it runs (see payments.service.ts), so
+    // this is the one place in the whole app that ever decides "this is
+    // paid" — a mismatched or fabricated amount in the webhook payload
+    // itself can no longer get silently accepted. It's also idempotent
+    // (locks the booking row, no-ops if already fully paid), so this stays
+    // safe regardless of whether the client's own call wins the race.
+    await this.paymentService.processPayment(
+      bookingId,
+      booking.userId,
+      0, // ignored for method:'paystack' — processPayment re-derives the real amount from Paystack directly
+      'paystack',
+      'webhook',
+      reference,
+    );
+    this.logger.log(`Booking ${bookingId} confirmed via webhook (ref: ${reference})`);
   }
 
-  private async handleTransferSuccess(data: any): Promise<void> {
-    const reference  = data?.reference;
-    const amountKobo = data?.amount;
+  // References a wallet top-up can carry: `wallet-topup-…` (built by
+  // /payments/paystack/initialize), `ZTR-WALLET-…` (built by WalletScreen's
+  // inline checkout), or an explicit metadata purpose. Booking references are
+  // `booking-…` / `ZTR-<hex>-…`, so these can't collide with them.
+  private isWalletTopUp(reference: string, data: any): boolean {
+    return (
+      reference.startsWith('wallet-topup-') ||
+      reference.startsWith('ZTR-WALLET-') ||
+      data?.metadata?.purpose === 'wallet_topup'
+    );
+  }
 
-    // Validate required fields
+  // `transfer.success` is Paystack's event for a PAYOUT from our balance to a
+  // bank account — not for money a customer paid in. This handler used to
+  // credit a user's wallet straight from the payload's amount, parsing the
+  // user id out of the reference string, with no check against Paystack
+  // itself. It is not a legitimate source of wallet credit, so it no longer
+  // credits from the payload: a `wallet-topup-` reference still goes through
+  // the same verified, idempotent path as every other top-up (and fails
+  // verification, harmlessly, if it is really a payout reference). Always
+  // returns normally so Paystack doesn't retry an event we've decided
+  // not to act on.
+  private async handleTransferSuccess(data: any): Promise<void> {
+    const reference = data?.reference;
+
     if (!reference || typeof reference !== 'string') {
       this.logger.warn('transfer.success: missing or invalid reference');
       return;
     }
 
-    if (!amountKobo || typeof amountKobo !== 'number') {
-      this.logger.warn('transfer.success: missing or invalid amount');
-      return;
-    }
-
-    // Only process wallet top-up references
     if (!reference.startsWith('wallet-topup-')) {
       this.logger.log(`transfer.success: ignoring non-wallet-topup reference: ${reference}`);
       return;
     }
 
-    // Reference format: wallet-topup-{userId}-{timestamp}
-    const parts  = reference.split('-');
-    const userId = parts[2];
-
-    if (!userId) {
-      this.logger.warn(`transfer.success: could not extract userId from reference: ${reference}`);
-      return;
+    try {
+      await this.walletService.fundFromWebhook(reference, 'webhook');
+    } catch (err: any) {
+      this.logger.warn(`transfer.success: ${reference} did not verify as a customer payment — not crediting (${err?.message ?? err})`);
     }
-
-    const amountNaira = amountKobo / 100;
-
-    const wallet = await this.walletRepo.findOne({ where: { userId } });
-    if (!wallet) {
-      this.logger.warn(`transfer.success: no wallet found for user ${userId}`);
-      return;
-    }
-
-    // Idempotency guard — check if this reference was already processed
-    const alreadyProcessed = await this.ledgerRepo.findOne({
-      where: { description: `Wallet top-up via Paystack (ref: ${reference})` },
-    });
-
-    if (alreadyProcessed) {
-      this.logger.log(`transfer.success: reference ${reference} already processed — skipping`);
-      return;
-    }
-
-    // Credit the wallet
-    wallet.balance           = Number(wallet.balance) + amountNaira;
-    wallet.lastTransactionAt = new Date();
-    await this.walletRepo.save(wallet);
-
-    // Create ledger entry
-    const ledger = this.ledgerRepo.create({
-      relatedUserId:   userId,
-      transactionType: 'CREDIT',
-      amount:          amountNaira,
-      description:     `Wallet top-up via Paystack (ref: ${reference})`,
-    });
-    await this.ledgerRepo.save(ledger);
-
-    this.logger.log(`Wallet credited ₦${amountNaira} for user ${userId} (ref: ${reference})`);
   }
 }

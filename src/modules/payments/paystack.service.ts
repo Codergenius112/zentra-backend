@@ -21,6 +21,11 @@ export interface PaystackVerifyResponse {
   paidAt: string | null;
   customerEmail: string;
   channel: string;
+  // Metadata echoed back is Paystack's copy of what transaction/initialize
+  // sent — attacker-controlled only for their own charges, never someone
+  // else's. WalletService uses it to tell wallet top-ups apart from booking
+  // payments; see creditVerifiedTopUp.
+  metadata: { userId?: string; bookingId?: string | null; purpose?: string } | null;
 }
 
 export interface PaystackBankListItem {
@@ -156,6 +161,7 @@ export class PaystackService {
         paidAt:        tx.paid_at ?? null,
         customerEmail: tx.customer?.email ?? '',
         channel:       tx.channel ?? '',
+        metadata:      tx.metadata ?? null,
       };
     } catch (err: any) {
       this.logger.error('Paystack verifyTransaction failed', err?.response?.data ?? err.message);

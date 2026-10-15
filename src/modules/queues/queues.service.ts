@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Queue } from '../../shared/entities/queue.entity';
 import { AuditService } from '../audit/audit.service';
 import { NotificationService } from '../notifications/notifications.service';
+import { AuditActionType } from '../../shared/enums';
 
 @Injectable()
 export class QueuesService {
@@ -29,7 +30,7 @@ export class QueuesService {
     const saved = await this.queueRepository.save(queue);
 
     await this.auditService.logAction({
-      actionType: 'QUEUE_JOINED' as any,
+      actionType: AuditActionType.QUEUE_JOINED,
       actorId: userId,
       resourceType: 'queue',
       resourceId: saved.id,
@@ -105,7 +106,7 @@ export class QueuesService {
     );
 
     await this.auditService.logAction({
-      actionType: 'QUEUE_CALLED' as any,
+      actionType: AuditActionType.QUEUE_CALLED,
       resourceType: 'queue',
       resourceId: updated.id,
       changes: { status: 'CALLED' },
@@ -136,7 +137,7 @@ export class QueuesService {
     const updated = await this.queueRepository.save(queue);
 
     await this.auditService.logAction({
-      actionType: 'QUEUE_CHECKIN' as any,
+      actionType: AuditActionType.QUEUE_CHECKED_IN,
       actorId: userId,
       resourceType: 'queue',
       resourceId: updated.id,
@@ -180,7 +181,7 @@ export class QueuesService {
     await this.queueRepository.save(remainingQueue);
 
     await this.auditService.logAction({
-      actionType: 'QUEUE_CANCELLED' as any,
+      actionType: AuditActionType.QUEUE_CANCELLED,
       actorId: userId,
       resourceType: 'queue',
       resourceId: queueId,

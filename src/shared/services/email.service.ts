@@ -21,6 +21,12 @@ interface TicketQrEmailPayload {
   qrCodeDataUrl: string;
 }
 
+interface PasswordResetEmailPayload {
+  customerName?: string;
+  resetToken: string;
+  expiresInMinutes?: number;
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -138,6 +144,41 @@ export class EmailService {
       subject,
       html,
       text: `Your ticket QR code is ready for booking ${payload.bookingId}.`,
+    });
+  }
+
+  async sendPasswordResetEmail(payload: PasswordResetEmailPayload & { to: string }): Promise<boolean> {
+    const to = payload.to;
+    const appName = this.getConfig('APP_NAME', 'Zentra') ?? 'Zentra';
+    const subject = `Reset your ${appName} password`;
+    const minutes = payload.expiresInMinutes ?? 15;
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #111827;">
+        <div style="background: #0f172a; color: white; padding: 24px; border-radius: 12px 12px 0 0;">
+          <h2 style="margin: 0; font-size: 28px;">${appName}</h2>
+          <p style="margin: 8px 0 0; opacity: 0.9;">Password reset request</p>
+        </div>
+        <div style="padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px; background: #ffffff;">
+          <p style="margin: 0 0 16px;">Hello ${payload.customerName ?? 'there'},</p>
+          <p style="margin: 0 0 20px;">Enter this code in the app to reset your password. It expires in ${minutes} minutes.</p>
+
+          <div style="text-align: center; margin: 24px 0;">
+            <span style="display: inline-block; font-family: 'Courier New', monospace; font-size: 22px; font-weight: 700; letter-spacing: 2px; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 10px; padding: 14px 20px; word-break: break-all;">
+              ${payload.resetToken}
+            </span>
+          </div>
+
+          <p style="margin: 0; color: #6b7280; font-size: 13px;">If you didn't request this, you can safely ignore this email — your password won't change.</p>
+        </div>
+      </div>
+    `;
+
+    return this.sendEmail({
+      to,
+      subject,
+      html,
+      text: `Your ${appName} password reset code is: ${payload.resetToken} (expires in ${minutes} minutes). If you didn't request this, ignore this email.`,
     });
   }
 

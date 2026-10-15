@@ -79,15 +79,20 @@ export class PaymentsController {
 
     const result = await this.paystackService.verifyTransaction(body.reference);
 
-    // If this was a wallet top-up and status is success, auto-credit wallet
+    // If this was a wallet top-up and status is success, auto-credit wallet.
+    // Goes through creditVerifiedTopUp rather than walletService.credit: this
+    // branch used to credit on EVERY call with the same reference (one real
+    // payment replayed into unlimited balance) and credited the caller even
+    // when the payment had been made under someone else's email. The shared
+    // method is idempotent per reference and checks the payer is the caller.
     if (
       result.status === 'success' &&
       body.reference.startsWith('wallet-topup-')
     ) {
-      const wallet = await this.walletService.credit(
+      const wallet = await this.walletService.creditVerifiedTopUp(
         user.id,
-        result.amountNaira,
-        `Wallet top-up via Paystack (ref: ${body.reference})`,
+        user.email,
+        result,
         ipAddress,
       );
 
@@ -145,9 +150,6 @@ export class PaymentsController {
   @CurrentUser() user: any,
   @IpAddress() ipAddress: string,
 ) {
-  console.log('[processPayment] raw body received:', JSON.stringify(body));
-  console.log('[processPayment] user from token:', JSON.stringify(user));
-
   return this.paymentService.processPayment(
     body.bookingId,
     user.id,

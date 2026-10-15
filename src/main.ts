@@ -15,11 +15,15 @@ async function bootstrap() {
   // (e.g. uploaded file URLs) come back as https.
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
-  // ── Raw body ONLY for Paystack webhook — must come before json middleware ──
-  // express.raw() captures the body as a Buffer, which is required for
-  // HMAC-SHA512 signature verification in PaystackWebhookController.
-  app.use('/payments/webhook', express.raw({ type: 'application/json' }));
-
+  // Raw body for Paystack webhook signature verification comes from
+  // req.rawBody — populated automatically by Nest because rawBody:true was
+  // passed to NestFactory.create above. There used to ALSO be a manual
+  // app.use('/payments/webhook', express.raw(...)) here; that consumed the
+  // request stream, then Nest's own built-in JSON body parser ran on the
+  // same route and tried to re-read an already-drained stream, throwing
+  // "stream is not readable" — every single webhook call 500'd before
+  // PaystackWebhookController ever ran. See that controller for the
+  // corresponding req.rawBody fix.
 
 app.enableCors();
 
