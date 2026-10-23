@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import * as nodemailer from 'nodemailer';
 import { EmailService } from './email.service';
 
 describe('EmailService', () => {
@@ -40,5 +41,52 @@ describe('EmailService', () => {
     });
 
     expect(qr).toContain('data:image/png;base64,');
+  });
+
+  it('uses Resend SMTP configuration when EMAIL_PROVIDER=resend', async () => {
+    const service = new EmailService({
+      get: (key: string) => {
+        switch (key) {
+          case 'EMAIL_PROVIDER':
+            return 'resend';
+          case 'EMAIL_FROM':
+            return 'noreply@zentra.app';
+          case 'EMAIL_FROM_NAME':
+            return 'Zentra';
+          case 'RESEND_API_KEY':
+            return 're_test_key';
+          default:
+            return undefined;
+        }
+      },
+    } as unknown as ConfigService);
+
+    const sendMail = jest.fn().mockResolvedValue({ messageId: 'abc' });
+    const createTransportSpy = jest.spyOn(nodemailer, 'createTransport').mockReturnValue({
+      sendMail,
+    } as any);
+
+    const sent = await (service as any).sendEmail({
+      to: 'user@example.com',
+      subject: 'Reset your password',
+      html: '<p>code</p>',
+      text: 'code',
+    });
+
+    expect(sent).toBe(true);
+    expect(createTransportSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: 'smtp.resend.com',
+        auth: { user: 'resend', pass: 're_test_key' },
+      }),
+    );
+    expect(sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'user@example.com',
+        subject: 'Reset your password',
+      }),
+    );
+
+    createTransportSpy.mockRestore();
   });
 });

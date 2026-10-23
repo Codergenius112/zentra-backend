@@ -110,8 +110,12 @@ PAYSTACK_PUBLIC_KEY=your_paystack_public_key_here
 PAYSTACK_WEBHOOK_SECRET=your_webhook_secret_here
 
 # Email Configuration
-EMAIL_PROVIDER=sendgrid
-SENDGRID_API_KEY=your_sendgrid_api_key_here
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=your_resend_api_key_here
+SMTP_HOST=smtp.resend.com
+SMTP_PORT=587
+SMTP_USER=resend
+SMTP_PASS=${RESEND_API_KEY}
 EMAIL_FROM=noreply@dlifestyle.com
 EMAIL_FROM_NAME=D'Lifestyle
 
