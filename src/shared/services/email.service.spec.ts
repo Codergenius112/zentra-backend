@@ -43,7 +43,7 @@ describe('EmailService', () => {
     expect(qr).toContain('data:image/png;base64,');
   });
 
-  it('uses Resend SMTP configuration when EMAIL_PROVIDER=resend', async () => {
+  it('uses Resend API when EMAIL_PROVIDER=resend', async () => {
     const service = new EmailService({
       get: (key: string) => {
         switch (key) {
@@ -61,9 +61,9 @@ describe('EmailService', () => {
       },
     } as unknown as ConfigService);
 
-    const sendMail = jest.fn().mockResolvedValue({ messageId: 'abc' });
-    const createTransportSpy = jest.spyOn(nodemailer, 'createTransport').mockReturnValue({
-      sendMail,
+    const fetchSpy = jest.spyOn(globalThis, 'fetch' as any).mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 'resend-123' }),
     } as any);
 
     const sent = await (service as any).sendEmail({
@@ -74,19 +74,17 @@ describe('EmailService', () => {
     });
 
     expect(sent).toBe(true);
-    expect(createTransportSpy).toHaveBeenCalledWith(
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://api.resend.com/emails',
       expect.objectContaining({
-        host: 'smtp.resend.com',
-        auth: { user: 'resend', pass: 're_test_key' },
-      }),
-    );
-    expect(sendMail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: 'user@example.com',
-        subject: 'Reset your password',
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer re_test_key',
+          'Content-Type': 'application/json',
+        }),
       }),
     );
 
-    createTransportSpy.mockRestore();
+    fetchSpy.mockRestore();
   });
 });

@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import * as QRCode from 'qrcode';
 
+const RESEND_API_BASE_URL = 'https://api.resend.com';
+
 interface ReceiptEmailPayload {
   customerName?: string;
   bookingId: string;
@@ -196,29 +198,60 @@ export class EmailService {
     const fromName = this.getConfig('EMAIL_FROM_NAME', 'Zentra');
     const fromAddress = this.getConfig('EMAIL_FROM', 'noreply@zentra.app');
     const provider = this.getConfig('EMAIL_PROVIDER', 'smtp')?.toLowerCase();
-    const smtpHost = this.getConfig('SMTP_HOST') ?? (provider === 'resend' ? 'smtp.resend.com' : undefined);
-    const smtpPort = Number(this.getConfig('SMTP_PORT') ?? (provider === 'resend' ? '587' : '587'));
-    const smtpUser = this.getConfig('SMTP_USER') ?? (provider === 'resend' ? 'resend' : undefined);
-    const smtpPass = this.getConfig('SMTP_PASS') ?? this.getConfig('RESEND_API_KEY') ?? this.getConfig('SENDGRID_API_KEY');
 
     if (!to || !subject) {
       this.logger.warn('Email skipped because recipient or subject is missing.');
       return false;
     }
 
-    const isSendgridProvider = provider === 'sendgrid';
-    const isResendProvider = provider === 'resend';
-    const hasExplicitResendKey = !!this.getConfig('RESEND_API_KEY');
-    const hasExplicitSendgridKey = !!this.getConfig('SENDGRID_API_KEY');
+    if (provider === 'resend') {
+      const resendApiKey = this.getConfig('RESEND_API_KEY');
+      if (!resendApiKey) {
+        this.logger.warn('Email skipped because RESEND_API_KEY is not configured.');
+        return false;
+      }
 
-    if (isSendgridProvider || isResendProvider || (!smtpHost && !smtpUser && !smtpPass && hasExplicitSendgridKey)) {
-      const host = smtpHost ?? (isResendProvider ? 'smtp.resend.com' : 'smtp.sendgrid.net');
-      const user = smtpUser ?? (isResendProvider ? 'resend' : 'apikey');
-      const pass = smtpPass ?? (isResendProvider ? this.getConfig('RESEND_API_KEY') : this.getConfig('SENDGRID_API_KEY'));
+      try {
+        const response = await fetch(`${RESEND_API_BASE_URL}/emails`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: `${fromName} <${fromAddress}>`,
+            to: [to],
+            subject,
+            html,
+            text,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.text();
+          this.logger.error(`Failed to send email via Resend: ${errorBody}`);
+          return false;
+        }
+
+        return true;
+      } catch (error) {
+        this.logger.error('Failed to send email via Resend', error instanceof Error ? error.stack : error);
+        return false;
+      }
+    }
+
+    const smtpHost = this.getConfig('SMTP_HOST');
+    const smtpPort = Number(this.getConfig('SMTP_PORT') ?? '587');
+    const smtpUser = this.getConfig('SMTP_USER');
+    const smtpPass = this.getConfig('SMTP_PASS') ?? this.getConfig('SENDGRID_API_KEY');
+
+    if (provider === 'sendgrid' || (!smtpHost && !smtpUser && !smtpPass && this.getConfig('SENDGRID_API_KEY'))) {
+      const host = smtpHost ?? 'smtp.sendgrid.net';
+      const user = smtpUser ?? 'apikey';
+      const pass = smtpPass ?? this.getConfig('SENDGRID_API_KEY');
 
       if (!pass) {
-        const missingKeyName = isResendProvider ? 'RESEND_API_KEY' : 'SENDGRID_API_KEY';
-        this.logger.warn(`Email skipped because ${missingKeyName} / SMTP credentials are not configured.`);
+        this.logger.warn('Email skipped because SENDGRID_API_KEY / SMTP credentials are not configured.');
         return false;
       }
 
@@ -240,14 +273,13 @@ export class EmailService {
 
         return true;
       } catch (error) {
-        this.logger.error(`Failed to send email via ${isResendProvider ? 'Resend' : 'SMTP/SendGrid'}`, error instanceof Error ? error.stack : error);
+        this.logger.error('Failed to send email via SMTP/SendGrid', error instanceof Error ? error.stack : error);
         return false;
       }
     }
 
     if (!smtpHost || !smtpUser || !smtpPass) {
-      const noConfigReason = isResendProvider || hasExplicitResendKey ? 'Resend' : 'SMTP';
-      this.logger.warn(`Email skipped because ${noConfigReason} credentials are not configured.`);
+      this.logger.warn('Email skipped because SMTP credentials are not configured.');
       return false;
     }
 
