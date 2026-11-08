@@ -7,6 +7,7 @@ const SCOPE_TO_BOOKING_TYPE: Record<BusinessScope, BookingType> = {
   [BusinessScope.TABLE_CLUB]:      BookingType.TABLE,
   [BusinessScope.APARTMENT]:       BookingType.APARTMENT,
   [BusinessScope.CAR_RENTAL]:      BookingType.CAR,
+  [BusinessScope.JET_CHARTER]:     BookingType.JET,
 };
 
 /**

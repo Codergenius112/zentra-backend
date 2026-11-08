@@ -15,6 +15,7 @@ export enum BookingType {
   TABLE = 'table',
   APARTMENT = 'apartment',
   CAR = 'car',
+  JET = 'jet',
 }
 
 export enum PaymentStatus {
@@ -60,6 +61,7 @@ export enum BusinessScope {
   APARTMENT = 'APARTMENT',
   TABLE_CLUB = 'TABLE_CLUB',
   EVENT_TICKETING = 'EVENT_TICKETING',
+  JET_CHARTER = 'JET_CHARTER',
 }
 
 export enum CommissionPayer {

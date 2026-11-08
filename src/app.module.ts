@@ -24,6 +24,7 @@ import { TicketsModule }       from './modules/tickets/tickets.module';
 import { TablesModule }        from './modules/tables/tables.module';
 import { ApartmentsModule }    from './modules/apartments/apartments.module';
 import { CarsModule }          from './modules/cars/cars.module';
+import { JetsModule }          from './modules/jets/jets.module';
 import { EventsModule }        from './modules/events/events.module';
 import { VenueModule }         from './modules/venue/venue.module';
 import { CampaignModule }      from './modules/campaign/campaign.module';
@@ -83,6 +84,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
     TablesModule,
     ApartmentsModule,
     CarsModule,
+    JetsModule,
     EventsModule,
     VenueModule,         // depends on AuditModule
     CampaignModule,      // depends on PaymentsModule + AuditModule + NotificationsModule

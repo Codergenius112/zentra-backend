@@ -5,6 +5,7 @@ import { Booking } from '../../shared/entities/booking.entity';
 import { PlatformSettings } from '../../shared/entities/platform-settings.entity';
 import { BookingType, BookingStatus, PaymentStatus, AuditActionType, CommissionPayer } from '../../shared/enums';
 import { AuditService } from '../audit/audit.service';
+import { BusinessContextService } from '../../shared/services/business-context.service';
 
 interface CreateApartmentBookingDto {
   apartmentId: string;
@@ -23,6 +24,7 @@ export class ApartmentsService {
     @InjectRepository(PlatformSettings)
     private platformSettingsRepository: Repository<PlatformSettings>,
     private auditService: AuditService,
+    private businessContext: BusinessContextService,
   ) {}
 
   private async getPlatformSettings(): Promise<PlatformSettings> {
@@ -78,6 +80,10 @@ export class ApartmentsService {
 
     booking.status = BookingStatus.INITIATED;
     booking.paymentStatus = PaymentStatus.UNPAID;
+    booking.businessId = await this.businessContext.resolveBusinessIdForBooking(
+      BookingType.APARTMENT,
+      createApartmentBookingDto.apartmentId,
+    );
     booking.metadata = {
       checkInDate: createApartmentBookingDto.checkInDate,
       checkOutDate: createApartmentBookingDto.checkOutDate,

@@ -11,8 +11,9 @@ import { Repository, DataSource } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { User } from '../../shared/entities/user.entity';
 import { Wallet } from '../../shared/entities/wallet.entity';
+import { Business } from '../../shared/entities/business.entity';
 import { RegisterDto, LoginDto, AuthResponseDto, AdminRegisterDto } from '../../shared/dtos/auth.dto';
-import { UserRole, BusinessScope } from '../../shared/enums';
+import { UserRole, BusinessScope, BusinessStatus } from '../../shared/enums';
 import { StringValue } from 'ms';
 import { EmailService } from '../../shared/services/email.service';
 
@@ -102,6 +103,17 @@ export class AuthService {
       });
 
       await manager.save(wallet);
+
+      if (savedUser.role === UserRole.ADMIN) {
+        const business = manager.create(Business, {
+          ownerId: savedUser.id,
+          name: `${dto.firstName} ${dto.lastName}'s Business`,
+          businessScopes: dto.businessScopes?.length ? (dto.businessScopes as BusinessScope[]) : [BusinessScope.TABLE_CLUB],
+          status: BusinessStatus.APPROVED,
+          isActive: true,
+        });
+        await manager.save(business);
+      }
 
       return this.generateAuthResponse(savedUser);
     });

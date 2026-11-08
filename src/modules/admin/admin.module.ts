@@ -19,6 +19,7 @@ import { AdminBookingsController }  from './admin-bookings.controller';
 import { AdminOrdersController }    from './admin-orders.controller';
 import { AdminStaffController }     from './admin-staff.controller';
 import { AdminDataSharingController } from './admin-sharing.controller'; // ← NEW (Phase 5)
+import { AdminBusinessesController }  from './admin-business.controller';
 import { OwnershipResolverService } from '../../shared/services/ownership-resolver.service';
 import { BusinessContextService } from '../../shared/services/business-context.service'; // ← NEW (multi-tenancy)
 
@@ -39,6 +40,7 @@ import { BusinessContextService } from '../../shared/services/business-context.s
     AdminOrdersController,
     AdminStaffController,
     AdminDataSharingController, // ← NEW (Phase 5)
+    AdminBusinessesController,
   ],
   exports: [AdminService, OwnershipResolverService],
 })

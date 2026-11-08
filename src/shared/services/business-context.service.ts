@@ -85,6 +85,12 @@ export class BusinessContextService {
         );
         return rows[0]?.businessId ?? null;
       }
+      case BookingType.JET: {
+        const rows = await this.dataSource.query(
+          `SELECT "businessId" FROM jet_listings WHERE id = $1`, [resourceId],
+        );
+        return rows[0]?.businessId ?? null;
+      }
       case BookingType.TICKET: {
         // resourceId = eventId directly (see OwnershipResolverService).
         const rows = await this.dataSource.query(

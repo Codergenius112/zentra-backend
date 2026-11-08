@@ -19,3 +19,4 @@ export { NotificationCampaign } from './notification-campaign.entity'; // ← NE
 export { Business } from './business.entity'; // ← NEW (multi-tenancy)
 export { StaffBusinessAssignment } from './staff-business-assignment.entity'; // ← NEW (multi-tenancy)
 export { BusinessDataShare } from './business-data-share.entity'; // ← NEW (multi-tenancy)
+export { JetListing } from './jet-listing.entity';

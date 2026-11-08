@@ -598,4 +598,46 @@ export class AdminService {
 
     return business;
   }
+
+  async getMyBusiness(businessId: string, user: { id: string; role: UserRole }, businessIds?: string[]) {
+    if (user.role !== UserRole.SUPER_ADMIN && businessIds !== undefined) {
+      if (!businessIds.includes(businessId)) {
+        throw new ForbiddenException('You do not have access to this business');
+      }
+    }
+    const business = await this.businessRepository.findOne({ where: { id: businessId } });
+    if (!business) throw new NotFoundException('Business not found');
+    return { ...business, isOwner: business.ownerId === user.id };
+  }
+
+  async createMyBusiness(
+    dto: { name: string; businessScopes: BusinessScope[]; payoutDetails?: Record<string, any> },
+    user: { id: string; role: UserRole },
+    ipAddress: string,
+  ) {
+    if (!dto.businessScopes?.length) {
+      throw new BadRequestException('A business needs at least one business scope.');
+    }
+    const business = this.businessRepository.create({
+      ownerId: user.id,
+      name: dto.name,
+      businessScopes: dto.businessScopes,
+      payoutDetails: dto.payoutDetails || null,
+      status: BusinessStatus.APPROVED,
+      isActive: true,
+    });
+    const saved = await this.businessRepository.save(business);
+
+    await this.auditService.logAction({
+      actionType: AuditActionType.BUSINESS_CREATED,
+      actorId: user.id,
+      actorRole: user.role,
+      resourceType: 'business',
+      resourceId: saved.id,
+      changes: { name: saved.name, businessScopes: saved.businessScopes },
+      ipAddress,
+    });
+
+    return { ...saved, isOwner: true };
+  }
 }

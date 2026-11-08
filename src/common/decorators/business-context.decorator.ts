@@ -11,6 +11,15 @@ export const BusinessIds = createParamDecorator((data: unknown, ctx: ExecutionCo
 });
 
 /**
+ * Extracts all accessible businessIds for the caller (owned + assigned).
+ * Unlike BusinessIds, this is not narrowed by the active X-Business-Id header.
+ */
+export const AllAccessibleBusinessIds = createParamDecorator((data: unknown, ctx: ExecutionContext) => {
+  const request = ctx.switchToHttp().getRequest();
+  return request.allAccessibleBusinessIds ?? request.businessIds;
+});
+
+/**
  * Extracts the resolved single active business id for this request (see
  * TenantScopeGuard for resolution rules). string | null.
  */

@@ -34,20 +34,26 @@ export class TenantScopeGuard implements CanActivate {
     const user = request.user;
     if (!user) throw new ForbiddenException('Authentication required');
 
-    const businessIds = await this.businessContext.getAccessibleBusinessIds(user);
-    request.businessIds = businessIds;
+    const accessibleBusinessIds = await this.businessContext.getAccessibleBusinessIds(user);
+    request.allAccessibleBusinessIds = accessibleBusinessIds;
 
     const headerBusinessId = (request.headers['x-business-id'] as string | undefined)?.trim() || undefined;
 
     let activeBusinessId: string | null = null;
+    let scopedBusinessIds: string[] | undefined = accessibleBusinessIds;
+
     if (headerBusinessId) {
-      if (businessIds !== undefined && !businessIds.includes(headerBusinessId)) {
+      if (accessibleBusinessIds !== undefined && !accessibleBusinessIds.includes(headerBusinessId)) {
         throw new ForbiddenException('You do not have access to the requested business.');
       }
       activeBusinessId = headerBusinessId;
-    } else if (businessIds !== undefined && businessIds.length === 1) {
-      activeBusinessId = businessIds[0];
+      scopedBusinessIds = [headerBusinessId];
+    } else if (accessibleBusinessIds !== undefined && accessibleBusinessIds.length === 1) {
+      activeBusinessId = accessibleBusinessIds[0];
+      scopedBusinessIds = [activeBusinessId];
     }
+
+    request.businessIds = scopedBusinessIds;
     request.activeBusinessId = activeBusinessId;
 
     // ← NEW — Business.businessScopes is the real source of truth for
@@ -56,7 +62,7 @@ export class TenantScopeGuard implements CanActivate {
     // (for list/read gating — "do I have this capability ANYWHERE");
     // activeBusinessScopes is the SPECIFIC target business's own scopes
     // (for create — "does THIS business support what I'm about to make").
-    request.businessScopes = await this.businessContext.getScopesForBusinesses(businessIds);
+    request.businessScopes = await this.businessContext.getScopesForBusinesses(accessibleBusinessIds);
     request.activeBusinessScopes = await this.businessContext.getBusinessScopes(activeBusinessId);
 
     // ← NEW (RolesGuard business-awareness fix) — the caller's role for the
