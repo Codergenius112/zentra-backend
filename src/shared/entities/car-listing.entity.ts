@@ -67,6 +67,17 @@ export class CarListing {
   @Column({ type: 'boolean', default: false })
   withDriver: boolean;
 
+  // ── Escort / Security Feature ─────────────────────────────────────────────
+  // Admin can toggle escort availability per listing and set a fixed price.
+  // When a user opts in at booking time, escortPrice is added to the total
+  // and stored in booking.metadata so finance can reconcile easily.
+  @Column({ type: 'boolean', default: false })
+  escortAvailable: boolean;
+
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  escortPrice: number;
+  // ─────────────────────────────────────────────────────────────────────────
+
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
 

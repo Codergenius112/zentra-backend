@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Booking } from '../../shared/entities/booking.entity';
+import { CarListing } from '../../shared/entities/car-listing.entity';
 import { PlatformSettings } from '../../shared/entities/platform-settings.entity';
 import { BookingType, BookingStatus, PaymentStatus, AuditActionType, CommissionPayer } from '../../shared/enums';
 import { AuditService } from '../audit/audit.service';
@@ -14,6 +15,8 @@ interface CreateCarRentalDto {
   price: number;
   driverLicense: string;
   pickupLocation: string;
+  /** true if the user wants escort/security personnel with the ride */
+  withEscort?: boolean;
 }
 
 @Injectable()
@@ -25,6 +28,8 @@ export class CarsService {
     private bookingRepository: Repository<Booking>,
     @InjectRepository(PlatformSettings)
     private platformSettingsRepository: Repository<PlatformSettings>,
+    @InjectRepository(CarListing)
+    private carListingRepository: Repository<CarListing>,
     private auditService: AuditService,
     private businessContext: BusinessContextService,
   ) {}
@@ -55,6 +60,19 @@ export class CarsService {
       throw new BadRequestException('Car not available for selected dates');
     }
 
+    // Load the car listing so we can validate escort eligibility
+    const carListing = await this.carListingRepository.findOne({
+      where: { id: createCarRentalDto.carId },
+    });
+    if (!carListing) {
+      throw new NotFoundException(`Car listing ${createCarRentalDto.carId} not found`);
+    }
+
+    // Guard: user cannot add escort if the listing doesn't offer it
+    if (createCarRentalDto.withEscort && !carListing.escortAvailable) {
+      throw new BadRequestException('Escort service is not available for this vehicle');
+    }
+
     // Get platform settings
     const platformSettings = await this.getPlatformSettings();
     const commissionRate = Number(platformSettings.commissionRate) || 0.03;
@@ -63,6 +81,9 @@ export class CarsService {
     const basePrice = createCarRentalDto.price;
     const commission = basePrice * commissionRate;
     const cautionFee = Math.ceil(basePrice * 0.2); // 20% caution fee
+
+    // Escort add-on
+    const escortFee = createCarRentalDto.withEscort ? Number(carListing.escortPrice) || 0 : 0;
 
     const booking = new Booking();
     booking.bookingType = BookingType.CAR;
@@ -73,11 +94,11 @@ export class CarsService {
     booking.serviceCharge = serviceCharge;
     booking.platformCommission = commission;
 
-    // If USER pays commission: add to total
+    // If USER pays commission: add to total; always include escort fee
     if (commissionPayer === CommissionPayer.USER) {
-      booking.totalAmount = basePrice + serviceCharge + commission;
+      booking.totalAmount = basePrice + serviceCharge + commission + escortFee;
     } else {
-      booking.totalAmount = basePrice + serviceCharge;
+      booking.totalAmount = basePrice + serviceCharge + escortFee;
     }
 
     booking.status = BookingStatus.INITIATED;
@@ -94,6 +115,9 @@ export class CarsService {
       cautionFee,
       commissionPayer,
       commissionRate,
+      // Escort details stored for finance reconciliation
+      withEscort: createCarRentalDto.withEscort ?? false,
+      escortFee,
     };
 
     const saved = await this.bookingRepository.save(booking);
@@ -103,7 +127,12 @@ export class CarsService {
       actorId: userId,
       resourceType: 'car',
       resourceId: saved.id,
-      changes: { pickupDate: createCarRentalDto.pickupDate, price: createCarRentalDto.price },
+      changes: {
+        pickupDate: createCarRentalDto.pickupDate,
+        price: createCarRentalDto.price,
+        withEscort: createCarRentalDto.withEscort ?? false,
+        escortFee,
+      },
       ipAddress,
     });
 

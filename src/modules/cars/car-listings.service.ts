@@ -34,6 +34,9 @@ export class CreateCarListingDto {
   @IsString() state: string;
   @IsOptional() @IsBoolean() withDriver?: boolean;
   @IsOptional() @IsString() managedBy?: string | null;
+  // Escort fields
+  @IsOptional() @IsBoolean() escortAvailable?: boolean;
+  @IsOptional() @IsNumber() @Min(0) escortPrice?: number;
 }
 
 export class UpdateCarListingDto {
@@ -56,6 +59,9 @@ export class UpdateCarListingDto {
   @IsOptional() @IsBoolean() withDriver?: boolean;
   @IsOptional() @IsString() managedBy?: string | null;
   @IsOptional() isActive?: boolean;
+  // Escort fields
+  @IsOptional() @IsBoolean() escortAvailable?: boolean;
+  @IsOptional() @IsNumber() @Min(0) escortPrice?: number;
 }
 
 export interface GetCarListingsQuery {
